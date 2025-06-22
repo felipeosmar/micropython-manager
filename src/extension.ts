@@ -390,6 +390,69 @@ function registerCommands(context: vscode.ExtensionContext) {
         }
     });
 
+    // Comando: Atualizar arquivos na árvore
+    const refreshFilesCommand = vscode.commands.registerCommand('micropython-manager.refreshFiles', async () => {
+        treeProvider.clearFileCache();
+        vscode.window.showInformationMessage('Lista de arquivos atualizada');
+    });
+
+    // Comando: Baixar arquivo do dispositivo
+    const downloadFileCommand = vscode.commands.registerCommand('micropython-manager.downloadFile', async (item) => {
+        if (!item || !item.file) {
+            vscode.window.showWarningMessage('Selecione um arquivo para baixar');
+            return;
+        }
+
+        if (item.file.isDirectory) {
+            vscode.window.showWarningMessage('Não é possível baixar um diretório');
+            return;
+        }
+
+        try {
+            // Selecionar local para salvar
+            const saveUri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(item.file.name),
+                filters: {
+                    'Python Files': ['py'],
+                    'All Files': ['*']
+                },
+                title: `Salvar ${item.file.name}`
+            });
+
+            if (saveUri) {
+                await deviceManager.downloadFile(item.file.deviceId, item.file.path, saveUri.fsPath);
+                vscode.window.showInformationMessage(`Arquivo ${item.file.name} baixado com sucesso`);
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Erro ao baixar arquivo: ${error}`);
+        }
+    });
+
+    // Comando: Excluir arquivo do dispositivo
+    const deleteFileCommand = vscode.commands.registerCommand('micropython-manager.deleteFile', async (item) => {
+        if (!item || !item.file) {
+            vscode.window.showWarningMessage('Selecione um arquivo para excluir');
+            return;
+        }
+
+        const fileType = item.file.isDirectory ? 'diretório' : 'arquivo';
+        const result = await vscode.window.showWarningMessage(
+            `Excluir ${fileType} "${item.file.name}" do dispositivo?`,
+            { modal: true },
+            'Sim', 'Não'
+        );
+
+        if (result === 'Sim') {
+            try {
+                await deviceManager.deleteFile(item.file.deviceId, item.file.path, item.file.isDirectory);
+                treeProvider.clearFileCache(item.file.deviceId);
+                vscode.window.showInformationMessage(`${fileType} excluído com sucesso`);
+            } catch (error) {
+                vscode.window.showErrorMessage(`Erro ao excluir ${fileType}: ${error}`);
+            }
+        }
+    });
+
     // Adicionar comandos ao contexto
     context.subscriptions.push(
         scanPortsCommand,
@@ -401,7 +464,10 @@ function registerCommands(context: vscode.ExtensionContext) {
         uploadFileCommand,
         resetDeviceCommand,
         showMemoryInfoCommand,
-        listFilesCommand
+        listFilesCommand,
+        refreshFilesCommand,
+        downloadFileCommand,
+        deleteFileCommand
     );
 }
 

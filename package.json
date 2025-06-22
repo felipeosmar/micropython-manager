@@ -62,6 +62,21 @@
         "command": "micropython-manager.listFiles",
         "title": "Listar Arquivos",
         "category": "MicroPython"
+      },
+      {
+        "command": "micropython-manager.refreshFiles",
+        "title": "Atualizar Arquivos",
+        "category": "MicroPython"
+      },
+      {
+        "command": "micropython-manager.downloadFile",
+        "title": "Baixar Arquivo",
+        "category": "MicroPython"
+      },
+      {
+        "command": "micropython-manager.deleteFile",
+        "title": "Excluir Arquivo",
+        "category": "MicroPython"
       }
     ],
     "views": {
@@ -92,6 +107,11 @@
         },
         {
           "command": "micropython-manager.disconnectAll",
+          "when": "view == micropython-devices",
+          "group": "navigation"
+        },
+        {
+          "command": "micropython-manager.refreshFiles",
           "when": "view == micropython-devices",
           "group": "navigation"
         }
@@ -126,6 +146,16 @@
           "command": "micropython-manager.disconnectDevice",
           "when": "view == micropython-devices && viewItem == connectedDevice",
           "group": "inline"
+        },
+        {
+          "command": "micropython-manager.downloadFile",
+          "when": "view == micropython-devices && viewItem == file",
+          "group": "inline"
+        },
+        {
+          "command": "micropython-manager.deleteFile",
+          "when": "view == micropython-devices && viewItem == file",
+          "group": "navigation"
         }
       ]
     }

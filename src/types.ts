@@ -44,7 +44,18 @@ export enum DeviceStatus {
     ERROR = 'error'
 }
 
+export interface ESP32File {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    size?: number;
+    deviceId: string;
+    depth?: number;
+}
+
 export interface DeviceTreeItem {
-    device: ESP32Device;
-    status: DeviceStatus;
+    device?: ESP32Device;
+    file?: ESP32File;
+    status?: DeviceStatus;
+    type: 'device' | 'file' | 'directory';
 }

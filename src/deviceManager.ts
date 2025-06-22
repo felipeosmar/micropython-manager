@@ -1,9 +1,9 @@
+import * as vscode from 'vscode';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
-import * as vscode from 'vscode';
+import { ESP32Device, SerialPortInfo, ESP32File } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ESP32Device, SerialPortInfo } from './types';
 
 /**
  * Gerenciador de dispositivos ESP32 com MicroPython
@@ -522,6 +522,135 @@ export class DeviceManager {
     }
 
     /**
+     * Obtém estrutura de arquivos do ESP32 para uso na árvore
+     * 
+     * Problema: Necessidade de representar estrutura de arquivos em árvore
+     * Solução: Comando otimizado que retorna lista de arquivos e diretórios com informações detalhadas
+     * Exemplo: Permite visualizar pastas e arquivos .py em árvore hierárquica
+     */
+    async getFileStructure(deviceId: string, dirPath: string = '/'): Promise<ESP32File[]> {
+        const connection = this.connections.get(deviceId);
+        if (!connection || !connection.isOpen) {
+            throw new Error('Dispositivo não conectado');
+        }
+
+        return new Promise((resolve, reject) => {
+            const files: ESP32File[] = [];
+            let responseData = '';
+            let isCapturingOutput = false;
+            
+            const parser = this.parsers.get(deviceId);
+            if (!parser) {
+                reject(new Error('Parser não encontrado'));
+                return;
+            }
+
+            const timeout = setTimeout(() => {
+                parser.off('data', onData);
+                reject(new Error('Timeout ao listar arquivos'));
+            }, 15000);
+
+            const onData = (data: string) => {
+                // Começar a capturar quando ver o marcador de início
+                if (data.includes('FILE_LIST_START')) {
+                    isCapturingOutput = true;
+                    responseData = '';
+                    return;
+                }
+                
+                // Parar de capturar e processar quando ver o marcador de fim
+                if (data.includes('FILE_LIST_END')) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    
+                    // Processar dados capturados
+                    const lines = responseData.split('\n');
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed && !trimmed.includes('FILE_LIST') && trimmed.length > 0) {
+                            try {
+                                // Formato esperado: "nome|tipo|tamanho"
+                                const parts = trimmed.split('|');
+                                if (parts.length >= 2) {
+                                    const fileName = parts[0];
+                                    const isDirectory = parts[1] === 'DIR';
+                                    const size = parts.length > 2 && parts[2] !== 'N/A' ? parseInt(parts[2]) : undefined;
+                                    
+                                    // Construir caminho completo
+                                    let fullPath;
+                                    if (dirPath === '/') {
+                                        fullPath = `/${fileName}`;
+                                    } else {
+                                        fullPath = `${dirPath}/${fileName}`;
+                                    }
+                                    
+                                    files.push({
+                                        name: fileName,
+                                        path: fullPath,
+                                        isDirectory,
+                                        size,
+                                        deviceId
+                                    });
+                                }
+                            } catch (e) {
+                                console.log('Erro ao processar linha:', trimmed, e);
+                            }
+                        }
+                    }
+                    
+                    resolve(files);
+                    return;
+                }
+                
+                // Capturar dados se estivermos no modo de captura
+                if (isCapturingOutput) {
+                    responseData += data;
+                }
+            };
+
+            parser.on('data', onData);
+
+            // Normalizar o caminho do diretório
+            const normalizedPath = dirPath.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+            
+            // Enviar comando otimizado para listar arquivos
+            const command = `
+try:
+    import os
+    print("FILE_LIST_START")
+    dir_path = "${normalizedPath.replace(/"/g, '\\"')}"
+    if dir_path == "/":
+        dir_path = ""
+    files = os.listdir("/" if dir_path == "" else dir_path)
+    for f in sorted(files):
+        full_path = ("/" + f) if dir_path == "" else (dir_path + "/" + f)
+        try:
+            stat_info = os.stat(full_path)
+            if stat_info[0] & 0x4000:  # S_IFDIR
+                print(f + "|DIR|N/A")
+            else:
+                print(f + "|FILE|" + str(stat_info[6]))
+        except:
+            print(f + "|FILE|0")
+    print("FILE_LIST_END")
+except Exception as e:
+    print("FILE_LIST_START")
+    print("ERRO: " + str(e))
+    print("FILE_LIST_END")
+`;
+
+            // Enviar comando sem adicionar \r\n extra para evitar problemas
+            connection.write(command, (error) => {
+                if (error) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    reject(error);
+                }
+            });
+        });
+    }
+
+    /**
      * Obtém lista de dispositivos conectados
      */
     getConnectedDevices(): ESP32Device[] {
@@ -547,6 +676,160 @@ export class DeviceManager {
      */
     getParser(deviceId: string): ReadlineParser | undefined {
         return this.parsers.get(deviceId);
+    }
+
+    /**
+     * Baixa arquivo do ESP32 para o computador
+     * 
+     * Problema: Necessidade de transferir arquivos .py do ESP32 para edição local
+     * Solução: Lê conteúdo via comandos Python e salva localmente
+     * Exemplo: Baixa main.py do ESP32 para backup ou edição
+     */
+    async downloadFile(deviceId: string, remotePath: string, localPath: string): Promise<void> {
+        const connection = this.connections.get(deviceId);
+        if (!connection || !connection.isOpen) {
+            throw new Error('Dispositivo não conectado');
+        }
+
+        return new Promise((resolve, reject) => {
+            let fileContent = '';
+            let isCapturingContent = false;
+            
+            const parser = this.parsers.get(deviceId);
+            if (!parser) {
+                reject(new Error('Parser não encontrado'));
+                return;
+            }
+
+            const timeout = setTimeout(() => {
+                parser.off('data', onData);
+                reject(new Error('Timeout ao baixar arquivo'));
+            }, 30000);
+
+            const onData = (data: string) => {
+                if (data.includes('FILE_CONTENT_START')) {
+                    isCapturingContent = true;
+                    fileContent = '';
+                    return;
+                }
+                
+                if (data.includes('FILE_CONTENT_END')) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    
+                    try {
+                        // Salvar arquivo localmente
+                        const fs = require('fs');
+                        fs.writeFileSync(localPath, fileContent);
+                        resolve();
+                    } catch (error) {
+                        reject(new Error(`Erro ao salvar arquivo: ${error}`));
+                    }
+                    return;
+                }
+                
+                if (isCapturingContent) {
+                    fileContent += data;
+                }
+            };
+
+            parser.on('data', onData);
+
+            // Comando para ler arquivo
+            const command = `
+try:
+    print("FILE_CONTENT_START")
+    with open("${remotePath.replace(/"/g, '\\"')}", "r") as f:
+        content = f.read()
+        print(content, end="")
+    print("FILE_CONTENT_END")
+except Exception as e:
+    print("FILE_CONTENT_START")
+    print("ERRO:", str(e))
+    print("FILE_CONTENT_END")
+`;
+
+            connection.write(command, (error) => {
+                if (error) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    reject(error);
+                }
+            });
+        });
+    }
+
+    /**
+     * Exclui arquivo ou diretório do ESP32
+     * 
+     * Problema: Necessidade de gerenciar espaço no ESP32 removendo arquivos desnecessários
+     * Solução: Usa os.remove() para arquivos e rmdir() para diretórios vazios
+     * Exemplo: Remove arquivos de teste ou backups antigos
+     */
+    async deleteFile(deviceId: string, filePath: string, isDirectory: boolean = false): Promise<void> {
+        const connection = this.connections.get(deviceId);
+        const outputChannel = this.outputChannels.get(deviceId);
+        
+        if (!connection || !connection.isOpen || !outputChannel) {
+            throw new Error('Dispositivo não conectado');
+        }
+
+        return new Promise((resolve, reject) => {
+            let responseData = '';
+            
+            const parser = this.parsers.get(deviceId);
+            if (!parser) {
+                reject(new Error('Parser não encontrado'));
+                return;
+            }
+
+            const timeout = setTimeout(() => {
+                parser.off('data', onData);
+                reject(new Error('Timeout ao excluir arquivo'));
+            }, 10000);
+
+            const onData = (data: string) => {
+                responseData += data;
+                
+                if (data.includes('DELETE_SUCCESS')) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    outputChannel.appendLine(`Arquivo/diretório excluído: ${filePath}`);
+                    resolve();
+                } else if (data.includes('DELETE_ERROR')) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    reject(new Error('Erro ao excluir arquivo/diretório'));
+                }
+            };
+
+            parser.on('data', onData);
+
+            // Comando para excluir arquivo ou diretório
+            const command = isDirectory ? `
+try:
+    import os
+    os.rmdir("${filePath.replace(/"/g, '\\"')}")
+    print("DELETE_SUCCESS")
+except Exception as e:
+    print("DELETE_ERROR:", str(e))
+` : `
+try:
+    import os
+    os.remove("${filePath.replace(/"/g, '\\"')}")  
+    print("DELETE_SUCCESS")
+except Exception as e:
+    print("DELETE_ERROR:", str(e))
+`;
+
+            connection.write(command, (error) => {
+                if (error) {
+                    clearTimeout(timeout);
+                    parser.off('data', onData);
+                    reject(error);
+                }
+            });
+        });
     }
 
     /**
