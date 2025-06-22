@@ -99,6 +99,12 @@ export class DeviceManager {
                 // Configurar listeners
                 parser.on('data', (data: string) => {
                     outputChannel.appendLine(data);
+                    // Atualizar última atividade quando receber dados
+                    const currentDevice = this.devices.get(deviceId);
+                    if (currentDevice) {
+                        currentDevice.lastActivity = new Date();
+                        this.devices.set(deviceId, currentDevice);
+                    }
                 });
 
                 serialPort.on('error', (err) => {
@@ -234,17 +240,45 @@ export class DeviceManager {
             throw new Error('Dispositivo não conectado');
         }
 
-        // Garantir que comando termine com \r\n para MicroPython
-        const formattedCommand = command.endsWith('\n') ? command.replace('\n', '\r\n') : command + '\r\n';
-        
-        connection.write(formattedCommand);
-        
-        // Atualizar última atividade
-        const device = this.devices.get(deviceId);
-        if (device) {
-            device.lastActivity = new Date();
-            this.devices.set(deviceId, device);
-        }
+        return new Promise((resolve, reject) => {
+            // Configurar timeout para comando
+            const timeout = setTimeout(() => {
+                reject(new Error('Timeout na execução do comando'));
+            }, 5000);
+
+            try {
+                // Formatear comando corretamente
+                let formattedCommand = command;
+                
+                // Se não termina com \r\n, adicionar
+                if (!command.endsWith('\r\n') && !command.endsWith('\n')) {
+                    formattedCommand = command + '\r\n';
+                } else if (command.endsWith('\n') && !command.endsWith('\r\n')) {
+                    formattedCommand = command.slice(0, -1) + '\r\n';
+                }
+                
+                // Enviar comando
+                connection.write(formattedCommand, (error) => {
+                    clearTimeout(timeout);
+                    
+                    if (error) {
+                        reject(error);
+                    } else {
+                        // Atualizar última atividade
+                        const device = this.devices.get(deviceId);
+                        if (device) {
+                            device.lastActivity = new Date();
+                            this.devices.set(deviceId, device);
+                        }
+                        resolve();
+                    }
+                });
+                
+            } catch (error) {
+                clearTimeout(timeout);
+                reject(error);
+            }
+        });
     }
 
     /**
@@ -506,6 +540,13 @@ export class DeviceManager {
      */
     getOutputChannel(deviceId: string): vscode.OutputChannel | undefined {
         return this.outputChannels.get(deviceId);
+    }
+
+    /**
+     * Obtém parser de um dispositivo para interceptar dados serial
+     */
+    getParser(deviceId: string): ReadlineParser | undefined {
+        return this.parsers.get(deviceId);
     }
 
     /**

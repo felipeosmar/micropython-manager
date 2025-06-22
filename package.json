@@ -20,12 +20,12 @@
       },
       {
         "command": "micropython-manager.connectDevice",
-        "title": "Conectar Dispositivo",
+        "title": "Conectar",
         "category": "MicroPython"
       },
       {
         "command": "micropython-manager.disconnectDevice",
-        "title": "Desconectar Dispositivo",
+        "title": "Desconectar",
         "category": "MicroPython"
       },
       {
@@ -35,7 +35,7 @@
       },
       {
         "command": "micropython-manager.openREPL",
-        "title": "Abrir REPL",
+        "title": "REPL",
         "category": "MicroPython"
       },
       {
@@ -50,7 +50,7 @@
       },
       {
         "command": "micropython-manager.resetDevice",
-        "title": "Reset Dispositivo",
+        "title": "Reset",
         "category": "MicroPython"
       },
       {
