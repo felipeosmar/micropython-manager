@@ -48,7 +48,7 @@ function registerCommands(context: vscode.ExtensionContext) {
         try {
             vscode.window.showInformationMessage('Escaneando portas seriais...');
             
-            const ports = await deviceManager.scanSerialPorts();
+            const ports = await deviceManager.listSerialPorts();
             
             if (ports.length === 0) {
                 vscode.window.showWarningMessage(
@@ -82,29 +82,19 @@ function registerCommands(context: vscode.ExtensionContext) {
 
     // Comando: Conectar dispositivo manualmente
     const connectDeviceCommand = vscode.commands.registerCommand('micropython-manager.connectDevice', async () => {
-        const portPath = await vscode.window.showInputBox({
-            prompt: 'Digite o caminho da porta serial (ex: /dev/ttyUSB0)',
-            placeHolder: '/dev/ttyUSB0',
-            validateInput: (value) => {
-                if (!value || value.trim().length === 0) {
-                    return 'Caminho da porta é obrigatório';
-                }
-                if (!value.startsWith('/dev/')) {
-                    return 'Caminho deve começar com /dev/';
-                }
-                return null;
-            }
-        });
+        const ports = await deviceManager.listSerialPorts();
+        if (ports.length === 0) {
+            vscode.window.showWarningMessage('Nenhuma porta serial encontrada. Verifique se o dispositivo está conectado.');
+            return;
+        }
 
-        if (portPath) {
-            try {
-                const device = await deviceManager.connectDevice(portPath);
-                if (device) {
-                    treeProvider.refresh();
-                }
-            } catch (error) {
-                vscode.window.showErrorMessage(`Erro ao conectar: ${error}`);
-            }
+        const selectedPort = await vscode.window.showQuickPick(
+            ports.map(p => ({ label: p.path, description: p.manufacturer })),
+            { placeHolder: 'Selecione a porta serial do seu dispositivo' }
+        );
+
+        if (selectedPort) {
+            await deviceManager.connectDevice(selectedPort.label);
         }
     });
 

@@ -185,27 +185,21 @@ export class REPLManager {
         outputChannel.appendLine(`\n=== Executando ${fileName} ===`);
 
         try {
-            // Entrar no modo paste do MicroPython (Ctrl+E)
-            await this.deviceManager.executeCommand(deviceId, '\x05'); // Ctrl+E
-            await this.sleep(100);
+            // Entrar no modo "raw" para execução de script (Ctrl+A)
+            await this.deviceManager.executeCommand(deviceId, '\x01');
 
-            // Enviar conteúdo do script
-            const lines = scriptContent.split('\n');
-            for (const line of lines) {
-                if (line.trim()) {
-                    await this.deviceManager.executeCommand(deviceId, line);
-                    await this.sleep(50); // Pequena pausa entre linhas
-                }
-            }
+            // Enviar o script para execução
+            await this.deviceManager.executeCommand(deviceId, scriptContent);
 
-            // Sair do modo paste (Ctrl+D)
-            await this.sleep(200);
-            await this.deviceManager.executeCommand(deviceId, '\x04'); // Ctrl+D
+            // Ctrl+D faz um soft reset, que executa o código e retorna ao REPL
+            await this.deviceManager.executeCommand(deviceId, '\x04'); 
 
-            outputChannel.appendLine('=== Script executado com sucesso ===\n');
+            outputChannel.appendLine('=== Script enviado para execução. A saída aparecerá abaixo. ===\n');
 
         } catch (error) {
             outputChannel.appendLine(`=== Erro na execução: ${error} ===\n`);
+            // Garante que saia do modo raw em caso de erro
+            await this.deviceManager.executeCommand(deviceId, '\x02');
             throw error;
         }
     }
@@ -294,48 +288,19 @@ export class REPLManager {
      */
     private async testBasicCommands(deviceId: string): Promise<boolean> {
         try {
-            const device = this.deviceManager.getDevice(deviceId);
-            if (!device) {
-                return false;
-            }
-
-            let lastActivity = device.lastActivity;
-            let testsPassed = 0;
-
             // Teste 1: Print simples
-            await this.deviceManager.executeCommand(deviceId, 'print(123)\r\n');
-            await this.sleep(300);
-            
-            let updatedDevice = this.deviceManager.getDevice(deviceId);
-            if (updatedDevice && updatedDevice.lastActivity && 
-                (!lastActivity || updatedDevice.lastActivity.getTime() > lastActivity.getTime())) {
-                testsPassed++;
-                lastActivity = updatedDevice.lastActivity;
-            }
+            const printOutput = await this.deviceManager.executeCommand(deviceId, 'print(123)');
+            if (!printOutput.includes('123')) return false;
 
             // Teste 2: Import básico
-            await this.deviceManager.executeCommand(deviceId, 'import gc\r\n');
-            await this.sleep(300);
-            
-            updatedDevice = this.deviceManager.getDevice(deviceId);
-            if (updatedDevice && updatedDevice.lastActivity && 
-                updatedDevice.lastActivity.getTime() > lastActivity.getTime()) {
-                testsPassed++;
-                lastActivity = updatedDevice.lastActivity;
-            }
+            const importOutput = await this.deviceManager.executeCommand(deviceId, 'import gc');
+            if (importOutput.toLowerCase().includes('error')) return false;
 
             // Teste 3: Comando com resposta esperada
-            await this.deviceManager.executeCommand(deviceId, 'print("TEST_OK")\r\n');
-            await this.sleep(400);
-            
-            updatedDevice = this.deviceManager.getDevice(deviceId);
-            if (updatedDevice && updatedDevice.lastActivity && 
-                updatedDevice.lastActivity.getTime() > lastActivity.getTime()) {
-                testsPassed++;
-            }
+            const testOkOutput = await this.deviceManager.executeCommand(deviceId, 'print("TEST_OK")');
+            if (!testOkOutput.includes('TEST_OK')) return false;
 
-            // Pelo menos 2 dos 3 testes devem passar
-            return testsPassed >= 2;
+            return true;
             
         } catch (error) {
             console.error('Erro no teste de comandos básicos:', error);
@@ -352,21 +317,11 @@ export class REPLManager {
      */
     private async prepareDeviceForREPL(deviceId: string): Promise<void> {
         try {
-            // Interromper qualquer execução em andamento
-            await this.deviceManager.executeCommand(deviceId, '\x03'); // Ctrl+C
-            await this.sleep(200);
+            // Interromper qualquer execução em andamento (Ctrl+C)
+            await this.deviceManager.executeCommand(deviceId, '\x03');
             
-            // Limpar buffer enviando alguns enters
-            await this.deviceManager.executeCommand(deviceId, '\r\n\r\n');
-            await this.sleep(300);
-            
-            // Verificar se prompt está disponível
-            await this.deviceManager.executeCommand(deviceId, '\r\n');
-            await this.sleep(200);
-            
-            // Comando silencioso para preparar ambiente
-            await this.deviceManager.executeCommand(deviceId, '# REPL Ready\r\n');
-            await this.sleep(200);
+            // Limpar buffer e garantir que estamos no prompt (Enter)
+            await this.deviceManager.executeCommand(deviceId, ''); // Envia um enter vazio
             
         } catch (error) {
             console.error('Erro ao preparar dispositivo para REPL:', error);
@@ -375,57 +330,16 @@ export class REPLManager {
     }
 
     /**
-     * Captura resposta do dispositivo por um período determinado
+     * Captura resposta do dispositivo para um comando específico.
      * 
-     * Problema: Necessário aguardar e capturar resposta específica do dispositivo
-     * Solução: Usa promises com timeout para aguardar resposta do serial parser
-     * Exemplo: Aguarda 2 segundos por resposta e retorna conteúdo ou string vazia
+     * Problema: Necessário aguardar e capturar resposta específica do dispositivo.
+     * Solução: Usa a promise retornada pelo novo `executeCommand`, que já captura a saída até o próximo prompt.
+     * Exemplo: `const output = await captureDeviceResponse(id, 'print(1+1)')` captura "2".
      */
-    private async captureDeviceResponse(deviceId: string, timeoutMs: number): Promise<string> {
-        return new Promise((resolve) => {
-            let capturedOutput = '';
-            let timeout: NodeJS.Timeout;
-            let dataHandler: ((data: string) => void) | null = null;
-
-            // Obter parser do device manager para interceptar dados
-            const device = this.deviceManager.getDevice(deviceId);
-            if (!device) {
-                resolve('');
-                return;
-            }
-
-            // Configurar timeout
-            timeout = setTimeout(() => {
-                if (dataHandler) {
-                    // Remover listener se existir
-                    try {
-                        // Tentar acessar parser via deviceManager (seria necessário expor este método)
-                        // Por enquanto, vamos simular com uma captura simplificada
-                    } catch (error) {
-                        console.warn('Erro ao remover listener:', error);
-                    }
-                }
-                resolve(capturedOutput);
-            }, timeoutMs);
-
-            // Para esta implementação, vamos usar uma abordagem alternativa
-            // Monitorar mudanças através de polling no output channel
-            const startTime = Date.now();
-            const pollInterval = setInterval(() => {
-                if (Date.now() - startTime >= timeoutMs) {
-                    clearInterval(pollInterval);
-                    clearTimeout(timeout);
-                    resolve(capturedOutput);
-                }
-                
-                // Simular captura verificando se há nova atividade no dispositivo
-                // Em implementação real, interceptaríamos dados do serial parser
-                const currentTime = Date.now();
-                if (device.lastActivity && currentTime - device.lastActivity.getTime() < 500) {
-                    capturedOutput += 'response_data'; // Placeholder para dados reais
-                }
-            }, 100);
-        });
+    private async captureDeviceResponse(deviceId: string, command: string): Promise<string> {
+        // Com a nova implementação do DeviceManager, basta chamar o executeCommand.
+        // O timeout já é gerenciado dentro do processador da fila de comandos.
+        return this.deviceManager.executeCommand(deviceId, command);
     }
 
     /**
@@ -437,91 +351,48 @@ export class REPLManager {
      */
     private async validateMicroPythonEnvironment(deviceId: string): Promise<{isValid: boolean, issues: string[]}> {
         const issues: string[] = [];
-        let validationsPassed = 0;
-        const totalValidations = 5;
-
+        
         try {
-            // Validação 1: Responsividade básica
-            const device = this.deviceManager.getDevice(deviceId);
-            if (!device) {
-                issues.push('Dispositivo não encontrado');
-                return {isValid: false, issues};
-            }
-
-            const initialActivity = device.lastActivity;
-            await this.deviceManager.executeCommand(deviceId, '\r\n');
-            await this.sleep(200);
-            
-            const updatedDevice = this.deviceManager.getDevice(deviceId);
-            if (updatedDevice && updatedDevice.lastActivity && 
-                (!initialActivity || updatedDevice.lastActivity.getTime() > initialActivity.getTime())) {
-                validationsPassed++;
-            } else {
-                issues.push('Dispositivo não está respondendo a comandos básicos');
+            // Validação 1: Responsividade básica (envia um enter e espera o prompt)
+            const enterOutput = await this.captureDeviceResponse(deviceId, '');
+            if (!enterOutput.includes('>>>')) {
+                issues.push('Dispositivo não responde com o prompt ">>>" do REPL.');
+                return { isValid: false, issues };
             }
 
             // Validação 2: Capacidade Python básica
-            await this.deviceManager.executeCommand(deviceId, '1+1\r\n');
-            await this.sleep(300);
-            
-            const mathDevice = this.deviceManager.getDevice(deviceId);
-            if (mathDevice && mathDevice.lastActivity && 
-                mathDevice.lastActivity.getTime() > updatedDevice!.lastActivity!.getTime()) {
-                validationsPassed++;
-            } else {
-                issues.push('Interpretador Python não está processando comandos matemáticos');
+            const mathOutput = await this.captureDeviceResponse(deviceId, 'print(1+1)');
+            if (!mathOutput.includes('2')) {
+                issues.push('Interpretador Python não processa comandos matemáticos.');
             }
 
             // Validação 3: Capacidade de import
-            let lastCheckActivity = mathDevice!.lastActivity!;
-            await this.deviceManager.executeCommand(deviceId, 'import sys\r\n');
-            await this.sleep(300);
-            
-            const importDevice = this.deviceManager.getDevice(deviceId);
-            if (importDevice && importDevice.lastActivity && 
-                importDevice.lastActivity.getTime() > lastCheckActivity.getTime()) {
-                validationsPassed++;
-                lastCheckActivity = importDevice.lastActivity;
-            } else {
-                issues.push('Sistema de imports do Python não está funcionando');
+            const importOutput = await this.captureDeviceResponse(deviceId, 'import sys');
+            if (importOutput.toLowerCase().includes('error')) {
+                issues.push('Sistema de imports do Python não está funcionando.');
             }
 
             // Validação 4: Específica do MicroPython
-            await this.deviceManager.executeCommand(deviceId, 'import micropython\r\n');
-            await this.sleep(400);
-            
-            const mpDevice = this.deviceManager.getDevice(deviceId);
-            if (mpDevice && mpDevice.lastActivity && 
-                mpDevice.lastActivity.getTime() > lastCheckActivity.getTime()) {
-                validationsPassed++;
-                lastCheckActivity = mpDevice.lastActivity;
-            } else {
-                issues.push('Módulo micropython não está disponível - pode não ser MicroPython');
+            const mpOutput = await this.captureDeviceResponse(deviceId, 'import micropython');
+            if (mpOutput.toLowerCase().includes('error')) {
+                issues.push('Módulo "micropython" não disponível.');
             }
 
-            // Validação 5: Comandos específicos do ESP32 (se aplicável)
-            await this.deviceManager.executeCommand(deviceId, 'import machine\r\n');
-            await this.sleep(300);
-            
-            const machineDevice = this.deviceManager.getDevice(deviceId);
-            if (machineDevice && machineDevice.lastActivity && 
-                machineDevice.lastActivity.getTime() > lastCheckActivity.getTime()) {
-                validationsPassed++;
-            } else {
-                issues.push('Módulo machine não disponível - pode não ser ESP32 com MicroPython');
+            // Validação 5: Comandos específicos do ESP32
+            const machineOutput = await this.captureDeviceResponse(deviceId, 'import machine');
+            if (machineOutput.toLowerCase().includes('error')) {
+                issues.push('Módulo "machine" não disponível.');
             }
 
-            const successRate = validationsPassed / totalValidations;
-            const isValid = successRate >= 0.6; // Pelo menos 60% dos testes devem passar
-
+            const isValid = issues.length < 2; // Permite no máximo 1 falha
             if (!isValid) {
-                issues.push(`Apenas ${validationsPassed}/${totalValidations} validações passaram`);
+                issues.unshift(`Muitas validações falharam (${issues.length}).`);
             }
 
             return {isValid, issues};
 
         } catch (error) {
-            issues.push(`Erro durante validação: ${error}`);
+            issues.push(`Erro fatal durante validação: ${error}`);
             return {isValid: false, issues};
         }
     }
@@ -576,33 +447,9 @@ class MicroPythonPseudoTerminal implements vscode.Pseudoterminal {
     }
 
     handleInput(data: string): void {
-        // Processar entrada do usuário caracter por caracter
-        for (let i = 0; i < data.length; i++) {
-            const char = data[i];
-            const charCode = char.charCodeAt(0);
-            
-            // Tratar teclas especiais
-            if (charCode === 13) { // Enter
-                this.writeEmitter.fire('\r\n');
-                this.sendCommand(this.inputBuffer + '\r\n');
-                this.inputBuffer = '';
-            } else if (charCode === 8 || charCode === 127) { // Backspace/Delete
-                if (this.inputBuffer.length > 0) {
-                    this.inputBuffer = this.inputBuffer.slice(0, -1);
-                    this.writeEmitter.fire('\b \b'); // Backspace visual
-                }
-            } else if (charCode === 3) { // Ctrl+C
-                this.writeEmitter.fire('^C\r\n');
-                this.sendCommand('\x03');
-                this.inputBuffer = '';
-            } else if (charCode >= 32) { // Caracteres printáveis
-                this.inputBuffer += char;
-                this.writeEmitter.fire(char); // Echo do caracter
-            } else {
-                // Outros caracteres de controle - enviar diretamente
-                this.sendCommand(char);
-            }
-        }
+        // Simplesmente envia os dados do terminal para a fila de comandos do dispositivo.
+        // A fila garante que tudo será processado em ordem.
+        this.sendCommand(data);
     }
 
     setDimensions(dimensions: vscode.TerminalDimensions): void {
@@ -620,28 +467,9 @@ class MicroPythonPseudoTerminal implements vscode.Pseudoterminal {
         }
 
         this.dataListener = (data: string) => {
-            // Filtrar dados recebidos para evitar eco desnecessário
-            const cleanData = data.trim();
-            
-            // Se não é vazio e não é echo do comando que enviamos
-            if (cleanData && !this.isEchoOfInput(cleanData)) {
-                // Processar e formatar saída
-                let formattedData = cleanData;
-                
-                // Adicionar quebra de linha se necessário
-                if (!formattedData.endsWith('\r\n')) {
-                    formattedData += '\r\n';
-                }
-                
-                // Colorir prompt do MicroPython
-                if (formattedData.includes('>>>')) {
-                    formattedData = formattedData.replace('>>>', '\x1b[36m>>>\x1b[0m');
-                } else if (formattedData.includes('...')) {
-                    formattedData = formattedData.replace('...', '\x1b[33m...\x1b[0m');
-                }
-                
-                this.writeEmitter.fire(formattedData);
-            }
+            // Repassa os dados brutos do dispositivo para o terminal do VS Code,
+            // substituindo newlines para a formatação correta do terminal.
+            this.writeEmitter.fire(data.replace(/\n/g, '\r\n'));
         };
 
         parser.on('data', this.dataListener);
@@ -651,13 +479,9 @@ class MicroPythonPseudoTerminal implements vscode.Pseudoterminal {
      * Verifica se os dados recebidos são eco do input do usuário
      */
     private isEchoOfInput(data: string): boolean {
-        // Se o buffer de input está vazio, não pode ser eco
-        if (this.inputBuffer.length === 0) {
-            return false;
-        }
-        
-        // Verifica se os dados contêm exatamente o que o usuário digitou
-        return data.includes(this.inputBuffer.trim()) && this.inputBuffer.trim().length > 2;
+        // Esta função se torna desnecessária, pois o REPL lida com o eco.
+        // A melhor abordagem é desativar o eco no dispositivo se isso se tornar um problema.
+        return false;
     }
 
     /**
@@ -665,43 +489,19 @@ class MicroPythonPseudoTerminal implements vscode.Pseudoterminal {
      */
     private async initializeREPL(): Promise<void> {
         try {
-            this.writeEmitter.fire('Preparando comunicação...\r\n');
+            this.writeEmitter.fire('Inicializando REPL...\r\n');
             
-            // Esperar um pouco para o listener ser configurado
-            await this.sleep(500);
-            
-            // Sequência de comandos para ativar REPL
-            this.writeEmitter.fire('Enviando comandos de inicialização...\r\n');
-            
-            // 1. Interromper qualquer execução
+            // 1. Interromper qualquer execução para garantir um estado limpo
             await this.sendCommand('\x03'); // Ctrl+C
-            await this.sleep(300);
             
-            // 2. Enviar alguns enters para limpar buffer
-            await this.sendCommand('\r\n\r\n');
-            await this.sleep(400);
-            
-            // 3. Comando simples para testar responsividade
-            await this.sendCommand('print("REPL_READY")\r\n');
-            await this.sleep(300);
-            
-            // 4. Outro enter para garantir prompt limpo
+            // 2. Enviar um enter para obter um prompt limpo
             await this.sendCommand('\r\n');
-            await this.sleep(200);
             
             this.isInitialized = true;
-            this.writeEmitter.fire('\x1b[32m✓ REPL MicroPython inicializado com sucesso!\x1b[0m\r\n');
-            this.writeEmitter.fire('\x1b[36mVocê pode digitar comandos Python agora:\x1b[0m\r\n');
-            this.writeEmitter.fire('\x1b[36m>>>\x1b[0m ');
+            this.writeEmitter.fire('\x1b[32m✓ REPL pronto!\x1b[0m\r\n');
             
         } catch (error) {
             this.writeEmitter.fire(`\x1b[31mErro ao inicializar REPL: ${error}\x1b[0m\r\n`);
-            this.writeEmitter.fire('Tentando novamente...\r\n');
-            
-            // Tentar novamente uma vez
-            setTimeout(() => {
-                this.initializeREPL();
-            }, 1000);
         }
     }
 
@@ -710,7 +510,9 @@ class MicroPythonPseudoTerminal implements vscode.Pseudoterminal {
      */
     private async sendCommand(command: string): Promise<void> {
         try {
-            await this.deviceManager.executeCommand(this.device.id, command);
+            // Não precisamos do retorno aqui, pois o listener de dados já exibe a saída.
+            // Apenas enviamos o comando para a fila.
+            this.deviceManager.executeCommand(this.device.id, command);
         } catch (error) {
             this.writeEmitter.fire(`\r\n\x1b[31mErro de comunicação: ${error}\x1b[0m\r\n`);
         }

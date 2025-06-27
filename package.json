@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:micropython-devices"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -50,8 +52,7 @@
       },
       {
         "command": "micropython-manager.resetDevice",
-        "title": "Reset",
-        "category": "MicroPython"
+        "title": "MicroPython: Resetar Dispositivo"
       },
       {
         "command": "micropython-manager.showMemoryInfo",
@@ -60,8 +61,7 @@
       },
       {
         "command": "micropython-manager.listFiles",
-        "title": "Listar Arquivos",
-        "category": "MicroPython"
+        "title": "MicroPython: Listar Arquivos no Dispositivo"
       },
       {
         "command": "micropython-manager.refreshFiles",
@@ -80,7 +80,7 @@
       }
     ],
     "views": {
-      "explorer": [
+      "micropython-manager": [
         {
           "id": "micropython-devices",
           "name": "Dispositivos MicroPython",
@@ -169,18 +169,18 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.101.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/vscode": "^1.101.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
     "@typescript-eslint/parser": "^8.31.1",
-    "eslint": "^9.25.1",
-    "typescript": "^5.8.3",
     "@vscode/test-cli": "^0.0.10",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.25.1",
+    "typescript": "^5.8.3"
   },
   "dependencies": {
-    "serialport": "^12.0.0",
-    "@serialport/parser-readline": "^12.0.0"
+    "@serialport/parser-readline": "^13.0.0",
+    "serialport": "^12.0.0"
   }
 }
