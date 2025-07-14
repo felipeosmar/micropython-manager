@@ -1,5 +1,7 @@
-out
-dist
-node_modules
 .vscode-test/
+.vscode/
+.claude/
+node_modules/
+out/
+dist/
 *.vsix
